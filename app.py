@@ -230,6 +230,10 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
+    # Inicializar session_state antes de cualquier st.stop() o rerun
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
     index = load_index()
@@ -287,9 +291,6 @@ def main() -> None:
         st.stop()
 
     client = anthropic.Anthropic(api_key=api_key)
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
 
     # ── Preguntas sugeridas (solo si la conversación está vacía) ──────────────
     if not st.session_state.messages:
