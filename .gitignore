@@ -20,4 +20,4 @@ env/
 
 # RAG — datos locales (no subir PDFs ni el índice al repo)
 data/pdfs/
-data/index.pkl
+# data/index.pkl
