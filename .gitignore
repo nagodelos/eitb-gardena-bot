@@ -17,3 +17,7 @@ env/
 # IDEs
 .vscode/
 .idea/
+
+# RAG — datos locales (no subir PDFs ni el índice al repo)
+data/pdfs/
+data/index.pkl

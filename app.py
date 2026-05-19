@@ -1,37 +1,34 @@
 import os
-from typing import Optional
+import pickle
+from pathlib import Path
+from typing import Optional, List, Dict, Any
 
+import numpy as np
 import anthropic
 import streamlit as st
 
 MODEL = "claude-sonnet-4-5"
-
+INDEX_PATH = Path(__file__).parent / "data" / "index.pkl"
 EITB_LOGO_URL = "https://images14.eitb.eus/multimedia/recursos/img/logo_eitbeus_cabecera3.png"
+TOP_K = 5
 
 CUSTOM_CSS = """
 <style>
-    /* ── Tipografía: Montserrat ─────────────────────────────────────────── */
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap');
 
     html, body, [class*="css"], .stApp, .stMarkdown, .stText,
     input, textarea, button, select, label, p, span, div {
         font-family: 'Montserrat', sans-serif !important;
     }
-
-    /* ── Layout ─────────────────────────────────────────────────────────── */
     .main .block-container {
         padding-top: 1.5rem;
         max-width: 820px;
     }
-
-    /* ── Headings ───────────────────────────────────────────────────────── */
     h1, h2, h3 {
         color: #000000 !important;
         font-weight: 700 !important;
         font-family: 'Montserrat', sans-serif !important;
     }
-
-    /* ── Subtítulo bilingüe ─────────────────────────────────────────────── */
     .eitb-subtitle {
         color: #595959;
         font-size: 0.95rem;
@@ -40,8 +37,6 @@ CUSTOM_CSS = """
         margin-bottom: 1.2rem;
         line-height: 1.5;
     }
-
-    /* ── Botones globales (sidebar, genéricos) ──────────────────────────── */
     .stButton > button {
         background-color: #0077CD !important;
         color: #FFFFFF !important;
@@ -54,8 +49,6 @@ CUSTOM_CSS = """
         background-color: #005ba3 !important;
         color: #FFFFFF !important;
     }
-
-    /* ── Botones de preguntas sugeridas ─────────────────────────────────── */
     div[data-testid="stHorizontalBlock"] .stButton > button {
         background-color: #0077CD !important;
         color: #FFFFFF !important;
@@ -73,8 +66,6 @@ CUSTOM_CSS = """
     div[data-testid="stHorizontalBlock"] .stButton > button:hover {
         background-color: #005ba3 !important;
     }
-
-    /* ── Sidebar ────────────────────────────────────────────────────────── */
     section[data-testid="stSidebar"] {
         background-color: #fafbfc !important;
     }
@@ -89,8 +80,6 @@ CUSTOM_CSS = """
         font-size: 0.78rem;
         line-height: 1.6;
     }
-
-    /* ── Acento rojo EITB: borde izquierdo para respuestas fuera de alcance */
     .eitb-out-of-scope {
         border-left: 4px solid #e4001f;
         background-color: #fde8eb;
@@ -98,23 +87,34 @@ CUSTOM_CSS = """
         border-radius: 0 6px 6px 0;
         margin: 0.5rem 0;
     }
-
-    /* ── Chat ────────────────────────────────────────────────────────────── */
     .stChatMessage {
         border-radius: 8px;
     }
-
-    /* ── Enlaces ─────────────────────────────────────────────────────────── */
-    a, a:visited {
-        color: #0077CD !important;
+    /* Sección de fuentes */
+    .eitb-sources {
+        margin-top: 0.8rem;
+        padding: 0.6rem 0.9rem;
+        background-color: #f0f6fc;
+        border-left: 3px solid #0077CD;
+        border-radius: 0 6px 6px 0;
+        font-size: 0.80rem;
+        color: #24292f;
     }
-    a:hover {
-        color: #005ba3 !important;
+    .eitb-sources strong {
+        color: #0077CD;
+        font-weight: 700;
     }
+    a, a:visited { color: #0077CD !important; }
+    a:hover { color: #005ba3 !important; }
 </style>
 """
 
 _RAG_DISCLAIMER = (
+    "Esta respuesta se basa en los documentos oficiales de transparencia de EITB "
+    "incluidos en la base de conocimiento de este bot."
+)
+
+_NO_RAG_DISCLAIMER = (
     "Esta respuesta se basa en conocimiento general y no en los documentos "
     "oficiales de EITB. Una próxima versión conectará la documentación de transparencia."
 )
@@ -127,7 +127,69 @@ SUGGESTED_QUESTIONS = [
 ]
 
 
-def build_system_prompt(language: str) -> str:
+# ── Carga del índice y modelo (cacheados) ──────────────────────────────────────
+
+@st.cache_resource(show_spinner="Cargando base de conocimiento...")
+def load_index() -> Optional[Dict[str, Any]]:
+    if not INDEX_PATH.exists():
+        return None
+    with open(INDEX_PATH, "rb") as f:
+        return pickle.load(f)
+
+
+@st.cache_resource(show_spinner="Cargando modelo de embeddings...")
+def load_embed_model(model_name: str):
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name)
+
+
+# ── Recuperación de contexto ───────────────────────────────────────────────────
+
+def retrieve(query: str, index: Dict[str, Any], top_k: int = TOP_K) -> List[Dict[str, Any]]:
+    model = load_embed_model(index["model"])
+    q_emb = model.encode([query], normalize_embeddings=True)[0]
+    scores = index["embeddings"] @ q_emb          # coseno (embeddings ya normalizados)
+    top_indices = np.argsort(scores)[::-1][:top_k]
+    return [
+        {**index["chunks"][i], "score": float(scores[i])}
+        for i in top_indices
+    ]
+
+
+# ── Prompts ────────────────────────────────────────────────────────────────────
+
+def build_system_prompt_rag(language: str, context_chunks: List[Dict[str, Any]]) -> str:
+    lang_rule = (
+        "Responde siempre en castellano, independientemente del idioma de la pregunta."
+        if language == "Castellano"
+        else "Erantzun beti euskaraz, galderaren hizkuntzaz gain."
+    )
+    context_text = "\n\n---\n\n".join(
+        f"[Fuente: {c['source']}, p. {c['page']}]\n{c['text']}"
+        for c in context_chunks
+    )
+    return f"""Eres el Bot de Transparencia de EITB (Euskal Irrati Telebista), un agente conversacional de transparencia institucional.
+
+Reglas estrictas:
+
+1. Responde ÚNICAMENTE usando la información de los fragmentos de documentos que se te proporcionan a continuación. No uses conocimiento externo.
+
+2. Si la información en los fragmentos no es suficiente para responder con precisión, indícalo claramente: "Los documentos disponibles no contienen información suficiente sobre esta cuestión."
+
+3. Cita las fuentes que has utilizado al final de tu respuesta con el formato exacto:
+   Fuentes: nombre_documento.pdf (p. X), nombre_documento2.pdf (p. Y)
+
+4. Solo respondes sobre EITB. Si preguntan sobre otro tema, decláralo y no respondas.
+
+5. {lang_rule}
+
+6. Sé conciso, riguroso y honesto.
+
+FRAGMENTOS DE DOCUMENTOS:
+{context_text}"""
+
+
+def build_system_prompt_fallback(language: str) -> str:
     lang_rule = (
         "Responde siempre en castellano, independientemente del idioma de la pregunta."
         if language == "Castellano"
@@ -139,16 +201,16 @@ Reglas que debes seguir estrictamente:
 
 1. Eres exclusivamente un agente de transparencia institucional de EITB. Tu único ámbito es el ente público EITB: su funcionamiento, financiación, organización interna, normativa aplicable, programación, audiencias y servicio público.
 
-2. Solo respondes sobre EITB. Si te preguntan algo fuera de ese ámbito, lo declaras claramente ("Esa pregunta está fuera del alcance de este bot de transparencia de EITB") y no inventas ni extrapolas información.
+2. Solo respondes sobre EITB. Si te preguntan algo fuera de ese ámbito, lo declaras claramente y no inventas información.
 
 3. Termina cada respuesta con la siguiente nota, separada por una línea en blanco:
 
 ---
-{_RAG_DISCLAIMER}
+{_NO_RAG_DISCLAIMER}
 
 4. {lang_rule}
 
-5. Sé conciso, riguroso y honesto. Cita datos concretos cuando los tengas. Si no dispones de información suficiente para responder con precisión, indícalo claramente."""
+5. Sé conciso, riguroso y honesto. Si no dispones de información suficiente, indícalo."""
 
 
 def get_api_key() -> Optional[str]:
@@ -158,15 +220,20 @@ def get_api_key() -> Optional[str]:
         return os.environ.get("ANTHROPIC_API_KEY")
 
 
+# ── App principal ──────────────────────────────────────────────────────────────
+
 def main() -> None:
     st.set_page_config(
         page_title="EITB Gardena Bot",
-        page_icon="https://images14.eitb.eus/multimedia/recursos/img/logo_eitbeus_cabecera3.png",
+        page_icon=EITB_LOGO_URL,
         layout="centered",
         initial_sidebar_state="expanded",
     )
 
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+    index = load_index()
+    rag_active = index is not None
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
@@ -178,6 +245,12 @@ def main() -> None:
         )
         st.markdown("---")
         st.caption(f"Modelo: `{MODEL}`")
+        if rag_active:
+            n_chunks = len(index["chunks"])
+            n_docs = len({c["source"] for c in index["chunks"]})
+            st.caption(f"Base de conocimiento: {n_docs} documentos · {n_chunks} fragmentos")
+        else:
+            st.caption("Base de conocimiento: no disponible (ejecuta `ingest.py`)")
         st.markdown("---")
         st.caption(
             "Este bot no solicita datos personales y no almacena "
@@ -194,6 +267,14 @@ def main() -> None:
         "</p>",
         unsafe_allow_html=True,
     )
+
+    if not rag_active:
+        st.warning(
+            "La base de conocimiento no está cargada. "
+            "Ejecuta `python3 ingest.py` para generarla. "
+            "El bot responderá con conocimiento general hasta entonces.",
+            icon="⚠️",
+        )
 
     # ── Clave API ─────────────────────────────────────────────────────────────
     api_key = get_api_key()
@@ -224,24 +305,42 @@ def main() -> None:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg["role"] == "assistant" and msg.get("sources"):
+                _render_sources(msg["sources"])
 
     # ── Generar respuesta si el último turno es del usuario ───────────────────
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        query = st.session_state.messages[-1]["content"]
+
+        if rag_active:
+            chunks = retrieve(query, index)
+            system_prompt = build_system_prompt_rag(language, chunks)
+        else:
+            chunks = []
+            system_prompt = build_system_prompt_fallback(language)
+
         with st.chat_message("assistant"):
             with client.messages.stream(
                 model=MODEL,
                 max_tokens=800,
                 temperature=0.2,
-                system=build_system_prompt(language),
+                system=system_prompt,
                 messages=[
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state.messages
                 ],
             ) as stream:
                 response_text = st.write_stream(stream.text_stream)
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response_text}
-        )
+
+            sources = _extract_sources(chunks) if rag_active else []
+            if sources:
+                _render_sources(sources)
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response_text,
+            "sources": sources,
+        })
 
     # ── Input del usuario ─────────────────────────────────────────────────────
     if user_input := st.chat_input(
@@ -249,6 +348,25 @@ def main() -> None:
     ):
         st.session_state.messages.append({"role": "user", "content": user_input})
         st.rerun()
+
+
+def _extract_sources(chunks: List[Dict[str, Any]]) -> List[str]:
+    seen = set()
+    sources = []
+    for c in chunks:
+        label = f"{c['source']} (p. {c['page']})"
+        if label not in seen:
+            seen.add(label)
+            sources.append(label)
+    return sources
+
+
+def _render_sources(sources: List[str]) -> None:
+    items = "".join(f"<li>{s}</li>" for s in sources)
+    st.markdown(
+        f'<div class="eitb-sources"><strong>Fuentes consultadas</strong><ul>{items}</ul></div>',
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
