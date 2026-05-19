@@ -6,45 +6,110 @@ import streamlit as st
 
 MODEL = "claude-sonnet-4-5"
 
+EITB_LOGO_URL = "https://images14.eitb.eus/multimedia/recursos/img/logo_eitbeus_cabecera3.png"
+
 CUSTOM_CSS = """
 <style>
+    /* ── Tipografía: Montserrat ─────────────────────────────────────────── */
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap');
+
+    html, body, [class*="css"], .stApp, .stMarkdown, .stText,
+    input, textarea, button, select, label, p, span, div {
+        font-family: 'Montserrat', sans-serif !important;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
     .main .block-container {
         padding-top: 1.5rem;
-        max-width: 800px;
+        max-width: 820px;
     }
-    h1 {
-        color: #1a1a2e;
-        font-weight: 700;
-        letter-spacing: -0.5px;
+
+    /* ── Headings ───────────────────────────────────────────────────────── */
+    h1, h2, h3 {
+        color: #000000 !important;
+        font-weight: 700 !important;
+        font-family: 'Montserrat', sans-serif !important;
     }
+
+    /* ── Subtítulo bilingüe ─────────────────────────────────────────────── */
+    .eitb-subtitle {
+        color: #595959;
+        font-size: 0.95rem;
+        font-weight: 400;
+        margin-top: -0.5rem;
+        margin-bottom: 1.2rem;
+        line-height: 1.5;
+    }
+
+    /* ── Botones globales (sidebar, genéricos) ──────────────────────────── */
+    .stButton > button {
+        background-color: #0077CD !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        font-weight: 600 !important;
+        border-radius: 6px !important;
+        font-family: 'Montserrat', sans-serif !important;
+    }
+    .stButton > button:hover {
+        background-color: #005ba3 !important;
+        color: #FFFFFF !important;
+    }
+
+    /* ── Botones de preguntas sugeridas ─────────────────────────────────── */
+    div[data-testid="stHorizontalBlock"] .stButton > button {
+        background-color: #0077CD !important;
+        color: #FFFFFF !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-size: 0.82rem !important;
+        font-weight: 600 !important;
+        padding: 0.6rem 0.8rem !important;
+        text-align: left !important;
+        white-space: normal !important;
+        height: auto !important;
+        line-height: 1.4 !important;
+        width: 100% !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton > button:hover {
+        background-color: #005ba3 !important;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────────────────────── */
+    section[data-testid="stSidebar"] {
+        background-color: #fafbfc !important;
+    }
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] .sidebar-heading {
+        color: #0077CD !important;
+        font-weight: 700 !important;
+    }
+    section[data-testid="stSidebar"] .stCaption,
+    section[data-testid="stSidebar"] p {
+        color: #595959;
+        font-size: 0.78rem;
+        line-height: 1.6;
+    }
+
+    /* ── Acento rojo EITB: borde izquierdo para respuestas fuera de alcance */
+    .eitb-out-of-scope {
+        border-left: 4px solid #e4001f;
+        background-color: #fde8eb;
+        padding: 0.75rem 1rem;
+        border-radius: 0 6px 6px 0;
+        margin: 0.5rem 0;
+    }
+
+    /* ── Chat ────────────────────────────────────────────────────────────── */
     .stChatMessage {
         border-radius: 8px;
     }
-    /* Suggested-question buttons */
-    div[data-testid="stHorizontalBlock"] .stButton > button {
-        background-color: #f4f6f8;
-        border: 1px solid #d0d7de;
-        border-radius: 8px;
-        color: #24292f;
-        font-size: 0.83rem;
-        padding: 0.55rem 0.75rem;
-        text-align: left;
-        white-space: normal;
-        height: auto;
-        line-height: 1.4;
-        width: 100%;
+
+    /* ── Enlaces ─────────────────────────────────────────────────────────── */
+    a, a:visited {
+        color: #0077CD !important;
     }
-    div[data-testid="stHorizontalBlock"] .stButton > button:hover {
-        background-color: #e8ecf0;
-        border-color: #8c959f;
-    }
-    section[data-testid="stSidebar"] {
-        background-color: #f8f9fa;
-    }
-    section[data-testid="stSidebar"] .stCaption {
-        color: #6c757d;
-        font-size: 0.78rem;
-        line-height: 1.5;
+    a:hover {
+        color: #005ba3 !important;
     }
 </style>
 """
@@ -96,14 +161,14 @@ def get_api_key() -> Optional[str]:
 def main() -> None:
     st.set_page_config(
         page_title="EITB Gardena Bot",
-        page_icon="📺",
+        page_icon="https://images14.eitb.eus/multimedia/recursos/img/logo_eitbeus_cabecera3.png",
         layout="centered",
         initial_sidebar_state="expanded",
     )
 
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    # ── Sidebar ──────────────────────────────────────────────────────────────
+    # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("### Configuración")
         language: str = st.radio(
@@ -120,10 +185,13 @@ def main() -> None:
         )
 
     # ── Cabecera ──────────────────────────────────────────────────────────────
-    st.title("📺 Bot de Transparencia de EITB")
+    st.image(EITB_LOGO_URL, width=180)
+    st.markdown("## Bot de Transparencia de EITB")
     st.markdown(
+        '<p class="eitb-subtitle">'
         "Pregunta sobre financiación, audiencias, organización y más &nbsp;·&nbsp; "
-        "*EITB-ri buruz galdetu: finantzaketa, audientziak, antolaketa eta gehiago*",
+        "EITB-ri buruz galdetu: finantzaketa, audientziak, antolaketa eta gehiago"
+        "</p>",
         unsafe_allow_html=True,
     )
 
@@ -142,7 +210,7 @@ def main() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # ── Preguntas sugeridas (solo si la conversación está vacía) ───────────────
+    # ── Preguntas sugeridas (solo si la conversación está vacía) ──────────────
     if not st.session_state.messages:
         st.markdown("**Preguntas sugeridas · Galdera gomendatuak**")
         col_a, col_b = st.columns(2)
